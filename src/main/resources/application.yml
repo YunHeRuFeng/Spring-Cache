@@ -1,0 +1,8 @@
+spring:
+  thymeleaf:
+    cache: false
+cache:
+  cleanup:
+    fixed-delay-ms: 10000
+server:
+  port: 8080
