@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LFU 策略数据结构与原理 - Local Cache Framework</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0e1a;
+    font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    color: #e0e6f0;
+    display: flex;
+    justify-content: center;
+    padding: 40px 20px;
+    min-height: 100vh;
+  }
+  .container { width: 1120px; }
+  h1 {
+    text-align: center;
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: 2px;
+  }
+  .subtitle {
+    text-align: center;
+    font-size: 14px;
+    color: #64748b;
+    margin-bottom: 36px;
+    letter-spacing: 1px;
+  }
+  .panel {
+    position: relative;
+    border-radius: 20px;
+    padding: 26px 30px 24px;
+    margin-bottom: 22px;
+    background: rgba(139,92,246,0.06);
+    backdrop-filter: blur(12px);
+  }
+  .panel::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 20px;
+    padding: 1.5px;
+    background: linear-gradient(135deg, #a78bfa, #f472b6);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+  .panel-label {
+    position: absolute;
+    top: -14px;
+    left: 28px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    padding: 4px 16px;
+    border-radius: 8px;
+    color: #fff;
+    background: linear-gradient(135deg, #a78bfa, #ec4899);
+  }
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 20px;
+  }
+  .mini-card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    padding: 18px;
+  }
+  .mini-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #f8fafc;
+    margin-bottom: 8px;
+  }
+  .mini-desc {
+    font-size: 12px;
+    color: #94a3b8;
+    line-height: 1.75;
+  }
+  .chip-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 16px;
+  }
+  .chip {
+    font-size: 11px;
+    color: #cbd5e1;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-top: 18px;
+  }
+  .step {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    padding: 14px;
+  }
+  .step-index {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    color: #fdf2f8;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #a78bfa, #ec4899);
+    margin-bottom: 10px;
+  }
+  .step-title {
+    font-size: 13px;
+    color: #f8fafc;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .step-desc {
+    font-size: 11px;
+    color: #94a3b8;
+    line-height: 1.7;
+  }
+  svg { width: 100%; height: auto; display: block; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>LFU 策略数据结构与原理</h1>
+  <p class="subtitle">双 HashMap + 频次桶 + minFrequency · 最少使用优先淘汰 · 同频次内保持先后顺序</p>
+
+  <div class="panel">
+    <div class="panel-label">STRUCTURE</div>
+    <div class="grid-2">
+      <div class="mini-card">
+        <div class="mini-title">数据结构映射</div>
+        <div class="mini-desc">
+          LFU 在本项目中没有复用链表基类，而是单独维护两层索引：
+          <strong>frequencies</strong> 记录每个 key 当前访问次数；
+          <strong>keysByFrequency</strong> 按频次把 key 放入桶中；
+          <strong>minFrequency</strong> 始终指向当前最小频次。
+          这样访问时可以从旧频次桶移到新频次桶，淘汰时直接从最小频次桶中拿第一个 key。
+        </div>
+        <div class="chip-wrap">
+          <span class="chip">frequencies: Map<K, Integer></span>
+          <span class="chip">keysByFrequency: Map<Integer, LinkedHashSet<K>></span>
+          <span class="chip">minFrequency = 最小桶号</span>
+          <span class="chip">evictKey() = min 桶首元素</span>
+        </div>
+      </div>
+      <div class="mini-card">
+        <div class="mini-title">代码语义</div>
+        <div class="mini-desc">
+          1. put 时把新 key 放入频次 1 的桶。<br>
+          2. access 时频次 +1，并从旧桶迁移到新桶。<br>
+          3. 如果旧桶空了，要更新 minFrequency。<br>
+          4. 淘汰时总是从 minFrequency 对应桶的第一个元素开始。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-label">VISUAL FLOW</div>
+    <svg viewBox="0 0 1060 610" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="freqBox" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#818cf8"/>
+          <stop offset="100%" stop-color="#6366f1"/>
+        </linearGradient>
+        <linearGradient id="bucket1" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#fb923c"/>
+          <stop offset="100%" stop-color="#ea580c"/>
+        </linearGradient>
+        <linearGradient id="bucket2" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#a78bfa"/>
+          <stop offset="100%" stop-color="#7c3aed"/>
+        </linearGradient>
+        <linearGradient id="bucket3" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#34d399"/>
+          <stop offset="100%" stop-color="#10b981"/>
+        </linearGradient>
+        <linearGradient id="highlight" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#f472b6"/>
+          <stop offset="100%" stop-color="#ec4899"/>
+        </linearGradient>
+        <filter id="glow"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#94a3b8"/></marker>
+      </defs>
+
+      <text x="90" y="36" fill="#a78bfa" font-size="16" font-weight="700">左侧：每个 key 的频次记录</text>
+      <text x="590" y="36" fill="#f472b6" font-size="16" font-weight="700">右侧：按频次分桶，桶内顺序用于同频次淘汰</text>
+
+      <rect x="40" y="54" width="360" height="250" rx="20" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+      <rect x="86" y="100" width="270" height="54" rx="16" fill="url(#freqBox)" filter="url(#glow)"/>
+      <text x="221" y="123" text-anchor="middle" fill="#fff" font-size="18" font-weight="700">K1 → 1</text>
+      <text x="221" y="141" text-anchor="middle" fill="rgba(255,255,255,0.72)" font-size="11">当前只访问过 1 次</text>
+      <rect x="86" y="176" width="270" height="54" rx="16" fill="url(#freqBox)"/>
+      <text x="221" y="199" text-anchor="middle" fill="#fff" font-size="18" font-weight="700">K2 → 2</text>
+      <text x="221" y="217" text-anchor="middle" fill="rgba(255,255,255,0.72)" font-size="11">访问两次，位于频次 2</text>
+      <rect x="86" y="252" width="270" height="54" rx="16" fill="url(#highlight)"/>
+      <text x="221" y="275" text-anchor="middle" fill="#fff" font-size="18" font-weight="700">K3 → 3</text>
+      <text x="221" y="293" text-anchor="middle" fill="rgba(255,255,255,0.72)" font-size="11">热点 Key，频次最高</text>
+
+      <line x1="400" y1="180" x2="470" y2="180" stroke="#94a3b8" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="400" y1="230" x2="470" y2="230" stroke="#94a3b8" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="400" y1="280" x2="470" y2="280" stroke="#94a3b8" stroke-width="3" marker-end="url(#arrow)"/>
+
+      <rect x="500" y="54" width="520" height="250" rx="20" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+
+      <rect x="550" y="86" width="420" height="54" rx="16" fill="url(#bucket1)" filter="url(#glow)"/>
+      <text x="600" y="119" fill="#fff" font-size="18" font-weight="700">freq = 1</text>
+      <rect x="690" y="95" width="80" height="36" rx="12" fill="rgba(255,255,255,0.18)"/>
+      <text x="730" y="118" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">K1</text>
+      <text x="892" y="119" text-anchor="middle" fill="#fff7ed" font-size="11">minFrequency = 1</text>
+
+      <rect x="550" y="156" width="420" height="54" rx="16" fill="url(#bucket2)"/>
+      <text x="600" y="189" fill="#fff" font-size="18" font-weight="700">freq = 2</text>
+      <rect x="690" y="165" width="80" height="36" rx="12" fill="rgba(255,255,255,0.18)"/>
+      <text x="730" y="188" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">K2</text>
+
+      <rect x="550" y="226" width="420" height="54" rx="16" fill="url(#bucket3)"/>
+      <text x="600" y="259" fill="#fff" font-size="18" font-weight="700">freq = 3</text>
+      <rect x="690" y="235" width="80" height="36" rx="12" fill="rgba(255,255,255,0.18)"/>
+      <text x="730" y="258" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">K3</text>
+
+      <rect x="150" y="340" width="760" height="56" rx="28" fill="rgba(244,114,182,0.1)" stroke="rgba(244,114,182,0.25)"/>
+      <text x="530" y="373" text-anchor="middle" fill="#fce7f3" font-size="16" font-weight="600">如果 K1 再次被访问：从 freq=1 桶移除 → 更新为 2 → 插入 freq=2 桶 → 若旧桶空，则 minFrequency 增大</text>
+
+      <text x="90" y="448" fill="#34d399" font-size="16" font-weight="700">淘汰原则：先看最小频次，再看桶内先后顺序</text>
+      <rect x="60" y="470" width="940" height="110" rx="20" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+      <rect x="110" y="505" width="180" height="42" rx="14" fill="url(#bucket1)"/>
+      <text x="200" y="530" text-anchor="middle" fill="#fff" font-size="17" font-weight="700">先定位 minFrequency</text>
+      <rect x="350" y="505" width="180" height="42" rx="14" fill="url(#bucket2)"/>
+      <text x="440" y="530" text-anchor="middle" fill="#fff" font-size="17" font-weight="700">读取该桶首元素</text>
+      <rect x="590" y="505" width="180" height="42" rx="14" fill="url(#highlight)" filter="url(#glow)"/>
+      <text x="680" y="530" text-anchor="middle" fill="#fff" font-size="17" font-weight="700">evict victim</text>
+      <rect x="830" y="505" width="120" height="42" rx="14" fill="url(#bucket3)"/>
+      <text x="890" y="530" text-anchor="middle" fill="#fff" font-size="17" font-weight="700">更新 min</text>
+      <line x1="290" y1="526" x2="350" y2="526" stroke="#94a3b8" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="530" y1="526" x2="590" y2="526" stroke="#94a3b8" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="770" y1="526" x2="830" y2="526" stroke="#94a3b8" stroke-width="3" marker-end="url(#arrow)"/>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <div class="panel-label">PRINCIPLE</div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-index">STEP 1</div>
+        <div class="step-title">新元素写入</div>
+        <div class="step-desc">put 时直接放入频次 1，对应代码会把 key 放进 `keysByFrequency[1]`，并把 `minFrequency` 重置为 1。</div>
+      </div>
+      <div class="step">
+        <div class="step-index">STEP 2</div>
+        <div class="step-title">访问升级</div>
+        <div class="step-desc">onAccess 时先从旧频次桶移除，再写入新频次桶，访问次数 +1，形成“频次迁移”。</div>
+      </div>
+      <div class="step">
+        <div class="step-index">STEP 3</div>
+        <div class="step-title">最小频次维护</div>
+        <div class="step-desc">旧桶被清空时，需要同步维护 `minFrequency`，否则淘汰时找不到正确的低频桶。</div>
+      </div>
+      <div class="step">
+        <div class="step-index">STEP 4</div>
+        <div class="step-title">淘汰 victim</div>
+        <div class="step-desc">evictKey 只需读取 `minFrequency` 桶中的第一个 key。桶内部使用 `LinkedHashSet` 保留同频次的先后次序。</div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -5,6 +5,7 @@ import com.playground.cache.core.CacheLookupResult;
 import com.playground.cache.core.CacheLookupStatus;
 import com.playground.cache.core.CachePolicyType;
 import com.playground.cache.core.CacheStats;
+import com.playground.cache.core.ArcEvictionPolicy;
 import com.playground.cache.core.FifoEvictionPolicy;
 import com.playground.cache.core.HotKeyView;
 import com.playground.cache.core.LfuEvictionPolicy;
@@ -123,6 +124,7 @@ public class CacheManagerService {
             case LRU -> new LocalCache<>(DEFAULT_CAPACITY, new LruEvictionPolicy<>());
             case LFU -> new LocalCache<>(DEFAULT_CAPACITY, new LfuEvictionPolicy<>());
             case FIFO -> new LocalCache<>(DEFAULT_CAPACITY, new FifoEvictionPolicy<>());
+            case ARC -> new LocalCache<>(DEFAULT_CAPACITY, new ArcEvictionPolicy<>(DEFAULT_CAPACITY));
         };
         this.cache = replacement;
         lastCleanupCount.set(0);

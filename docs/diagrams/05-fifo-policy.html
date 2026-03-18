@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FIFO 策略数据结构与原理 - Local Cache Framework</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0e1a;
+    font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    color: #e0e6f0;
+    display: flex;
+    justify-content: center;
+    padding: 40px 20px;
+    min-height: 100vh;
+  }
+  .container { width: 1100px; }
+  h1 {
+    text-align: center;
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: 2px;
+  }
+  .subtitle {
+    text-align: center;
+    font-size: 14px;
+    color: #64748b;
+    margin-bottom: 36px;
+    letter-spacing: 1px;
+  }
+  .panel {
+    position: relative;
+    border-radius: 20px;
+    padding: 26px 30px 24px;
+    margin-bottom: 22px;
+    background: rgba(16,185,129,0.06);
+    backdrop-filter: blur(12px);
+  }
+  .panel::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 20px;
+    padding: 1.5px;
+    background: linear-gradient(135deg, #34d399, #0ea5e9);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+  .panel-label {
+    position: absolute;
+    top: -14px;
+    left: 28px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    padding: 4px 16px;
+    border-radius: 8px;
+    color: #fff;
+    background: linear-gradient(135deg, #34d399, #0ea5e9);
+  }
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1.15fr 1fr;
+    gap: 20px;
+  }
+  .mini-card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    padding: 18px;
+  }
+  .mini-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #f8fafc;
+    margin-bottom: 8px;
+  }
+  .mini-desc {
+    font-size: 12px;
+    color: #94a3b8;
+    line-height: 1.75;
+  }
+  .chip-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 16px;
+  }
+  .chip {
+    font-size: 11px;
+    color: #cbd5e1;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  .compare-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-top: 18px;
+  }
+  .compare-card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    padding: 14px;
+  }
+  .compare-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #f8fafc;
+    margin-bottom: 8px;
+  }
+  .compare-desc {
+    font-size: 11px;
+    color: #94a3b8;
+    line-height: 1.7;
+  }
+  svg { width: 100%; height: auto; display: block; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>FIFO 策略数据结构与原理</h1>
+  <p class="subtitle">HashMap + 双向链表 · 按插入顺序稳定排列 · 访问不会改变顺序</p>
+
+  <div class="panel">
+    <div class="panel-label">STRUCTURE</div>
+    <div class="grid-2">
+      <div class="mini-card">
+        <div class="mini-title">数据结构映射</div>
+        <div class="mini-desc">
+          FIFO 与 LRU 共用同一套链表骨架：<strong>nodeIndex</strong> 用于快速定位节点，
+          <strong>head / tail</strong> 维护顺序，<strong>evictKey</strong> 同样从 head.next 开始淘汰。
+          但核心区别在于：FIFO 的顺序只由“写入时刻”决定，访问命中不会触发重排。
+        </div>
+        <div class="chip-wrap">
+          <span class="chip">nodeIndex: Map<K, Node<K>></span>
+          <span class="chip">append(node) 维持入队顺序</span>
+          <span class="chip">onAccess(entry) = no-op</span>
+          <span class="chip">evictKey() = 最早进入的 key</span>
+        </div>
+      </div>
+      <div class="mini-card">
+        <div class="mini-title">代码语义</div>
+        <div class="mini-desc">
+          1. put 时仍然是尾插。<br>
+          2. access 时不执行 moveToTail。<br>
+          3. 因为顺序稳定，所以越早插入的节点越靠近 head。<br>
+          4. 容量不足时，最先插入的节点先被淘汰。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-label">VISUAL FLOW</div>
+    <svg viewBox="0 0 1040 560" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="gHead" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#06b6d4"/>
+          <stop offset="100%" stop-color="#0ea5e9"/>
+        </linearGradient>
+        <linearGradient id="gOld" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#f87171"/>
+          <stop offset="100%" stop-color="#ef4444"/>
+        </linearGradient>
+        <linearGradient id="gNormal" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#34d399"/>
+          <stop offset="100%" stop-color="#10b981"/>
+        </linearGradient>
+        <linearGradient id="gTail" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#a78bfa"/>
+          <stop offset="100%" stop-color="#7c3aed"/>
+        </linearGradient>
+        <filter id="glow"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#94a3b8"/></marker>
+      </defs>
+
+      <text x="126" y="36" fill="#34d399" font-size="16" font-weight="700">插入顺序决定链表顺序：K1 → K2 → K3 → K4</text>
+      <rect x="36" y="58" width="968" height="158" rx="20" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+
+      <rect x="68" y="110" width="90" height="54" rx="27" fill="url(#gHead)" filter="url(#glow)"/>
+      <text x="113" y="142" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">head</text>
+      <rect x="214" y="101" width="120" height="72" rx="18" fill="url(#gOld)" filter="url(#glow)"/>
+      <text x="274" y="132" text-anchor="middle" fill="#fff" font-size="19" font-weight="700">K1</text>
+      <text x="274" y="152" text-anchor="middle" fill="rgba(255,255,255,0.74)" font-size="11">最早插入</text>
+      <rect x="388" y="101" width="120" height="72" rx="18" fill="url(#gNormal)"/>
+      <text x="448" y="132" text-anchor="middle" fill="#fff" font-size="19" font-weight="700">K2</text>
+      <text x="448" y="152" text-anchor="middle" fill="rgba(255,255,255,0.74)" font-size="11">第二个进入</text>
+      <rect x="562" y="101" width="120" height="72" rx="18" fill="url(#gNormal)"/>
+      <text x="622" y="132" text-anchor="middle" fill="#fff" font-size="19" font-weight="700">K3</text>
+      <text x="622" y="152" text-anchor="middle" fill="rgba(255,255,255,0.74)" font-size="11">第三个进入</text>
+      <rect x="736" y="101" width="120" height="72" rx="18" fill="url(#gTail)"/>
+      <text x="796" y="132" text-anchor="middle" fill="#fff" font-size="19" font-weight="700">K4</text>
+      <text x="796" y="152" text-anchor="middle" fill="rgba(255,255,255,0.74)" font-size="11">最新插入</text>
+      <rect x="906" y="110" width="90" height="54" rx="27" fill="url(#gHead)"/>
+      <text x="951" y="142" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">tail</text>
+
+      <line x1="158" y1="137" x2="214" y2="137" stroke="#94a3b8" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="334" y1="137" x2="388" y2="137" stroke="#94a3b8" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="508" y1="137" x2="562" y2="137" stroke="#94a3b8" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="682" y1="137" x2="736" y2="137" stroke="#94a3b8" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="856" y1="137" x2="906" y2="137" stroke="#94a3b8" stroke-width="3" marker-end="url(#arrow)"/>
+
+      <rect x="144" y="246" width="752" height="54" rx="27" fill="rgba(56,189,248,0.1)" stroke="rgba(56,189,248,0.24)"/>
+      <text x="520" y="279" text-anchor="middle" fill="#e0f2fe" font-size="16" font-weight="600">访问 K2 / K4 后，链表顺序保持不变 —— FIFO 的 onAccess 是空实现</text>
+
+      <text x="126" y="348" fill="#f87171" font-size="16" font-weight="700">容量满时：直接淘汰 head.next，也就是最早进入缓存的 K1</text>
+      <rect x="36" y="370" width="968" height="158" rx="20" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+      <rect x="68" y="422" width="90" height="54" rx="27" fill="url(#gHead)"/>
+      <text x="113" y="454" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">head</text>
+      <rect x="214" y="413" width="120" height="72" rx="18" fill="url(#gOld)"/>
+      <text x="274" y="444" text-anchor="middle" fill="#fff" font-size="19" font-weight="700">K2</text>
+      <text x="274" y="464" text-anchor="middle" fill="rgba(255,255,255,0.74)" font-size="11">新的队首</text>
+      <rect x="388" y="413" width="120" height="72" rx="18" fill="url(#gNormal)"/>
+      <text x="448" y="444" text-anchor="middle" fill="#fff" font-size="19" font-weight="700">K3</text>
+      <rect x="562" y="413" width="120" height="72" rx="18" fill="url(#gNormal)"/>
+      <text x="622" y="444" text-anchor="middle" fill="#fff" font-size="19" font-weight="700">K4</text>
+      <rect x="736" y="413" width="120" height="72" rx="18" fill="url(#gTail)" filter="url(#glow)"/>
+      <text x="796" y="444" text-anchor="middle" fill="#fff" font-size="19" font-weight="700">K5</text>
+      <text x="796" y="464" text-anchor="middle" fill="rgba(255,255,255,0.74)" font-size="11">新写入尾部</text>
+      <rect x="906" y="422" width="90" height="54" rx="27" fill="url(#gHead)"/>
+      <text x="951" y="454" text-anchor="middle" fill="#fff" font-size="16" font-weight="700">tail</text>
+
+      <line x1="158" y1="449" x2="214" y2="449" stroke="#94a3b8" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="334" y1="449" x2="388" y2="449" stroke="#94a3b8" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="508" y1="449" x2="562" y2="449" stroke="#94a3b8" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="682" y1="449" x2="736" y2="449" stroke="#94a3b8" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="856" y1="449" x2="906" y2="449" stroke="#94a3b8" stroke-width="3" marker-end="url(#arrow)"/>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <div class="panel-label">PRINCIPLE</div>
+    <div class="compare-grid">
+      <div class="compare-card">
+        <div class="compare-title">写入规则</div>
+        <div class="compare-desc">新节点始终 append 到 tail 前。这样链表天然保持“先进先出”的入队顺序。</div>
+      </div>
+      <div class="compare-card">
+        <div class="compare-title">访问规则</div>
+        <div class="compare-desc">访问不会改变顺序，这是 FIFO 与 LRU 的最大差异。本项目中 `onAccess` 明确为空实现。</div>
+      </div>
+      <div class="compare-card">
+        <div class="compare-title">淘汰规则</div>
+        <div class="compare-desc">容量不足时依旧调用 `evictKey`，但因为链表顺序稳定，所以 head.next 永远是最早进入缓存的元素。</div>
+      </div>
+    </div>
+    <div class="mini-card" style="margin-top:18px;">
+      <div class="mini-title">一句话总结</div>
+      <div class="mini-desc">
+        FIFO 的本质是“<strong>顺序只看进入时间，不看访问热度</strong>”。
+        在你的代码里，它和 LRU 共享双向链表基础设施，但通过让 `onAccess` 保持空实现，
+        实现了“同样的数据结构，不同的顺序语义”。这也正好体现了当前策略抽象设计的优雅之处。
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
